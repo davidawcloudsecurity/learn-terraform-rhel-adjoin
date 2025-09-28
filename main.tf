@@ -281,8 +281,8 @@ resource "aws_instance" "rhel" {
     systemctl start amazon-ssm-agent
     
     # Configure DNS to use AD DNS servers
-    AD_DNS1="${aws_directory_service_directory.main.dns_ip_addresses[0]}"
-    AD_DNS2="${aws_directory_service_directory.main.dns_ip_addresses[1]}"
+    AD_DNS1="${tolist(aws_directory_service_directory.main.dns_ip_addresses)[0]}"
+    AD_DNS2="${tolist(aws_directory_service_directory.main.dns_ip_addresses)[1]}"
     
     # Update resolv.conf
     cat > /etc/resolv.conf << EOL
