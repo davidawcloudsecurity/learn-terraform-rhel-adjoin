@@ -6,6 +6,15 @@ terraform {
       version = "~> 5.0"
     }
   }
+  
+  # Comment out backend initially, uncomment after bootstrap
+  # backend "s3" {
+  #   bucket = "your-terraform-state-bucket"
+  #   key    = "infrastructure/terraform.tfstate"
+  #   region = "us-east-1"
+  #   dynamodb_table = "terraform-state-lock"
+  #   encrypt        = true
+  # }
 }
 
 provider "aws" {
@@ -185,17 +194,39 @@ resource "aws_instance" "rhel" {
     #!/bin/bash
     yum update -y
     
+    # Install AD join dependencies
+    yum install -y realmd sssd oddjob oddjob-mkhomedir adcli samba-common-tools krb5-workstation
+    
     # Create new user ssm-user2
     useradd -m ssm-user2
     echo "ssm-user2:P@ssw0rd123" | chpasswd
-    
-    # Add user to sudo group
     usermod -aG wheel ssm-user2
     
-    # Install SSM agent (usually pre-installed on RHEL)
+    # Install SSM agent
     yum install -y amazon-ssm-agent
     systemctl enable amazon-ssm-agent
     systemctl start amazon-ssm-agent
+    
+    # Configure DNS to use AD DNS servers
+    AD_DNS1="${aws_directory_service_directory.main.dns_ip_addresses[0]}"
+    AD_DNS2="${aws_directory_service_directory.main.dns_ip_addresses[1]}"
+    
+    # Update resolv.conf
+    cat > /etc/resolv.conf << EOL
+nameserver $AD_DNS1
+nameserver $AD_DNS2
+search ${aws_directory_service_directory.main.name}
+EOL
+    
+    # Join domain
+    echo "P@ssw0rd123" | realm join -U Administrator ${aws_directory_service_directory.main.name}
+    
+    # Configure SSSD
+    systemctl enable sssd
+    systemctl start sssd
+    
+    # Allow domain users to login
+    realm permit --all
   EOF
   )
 
