@@ -88,7 +88,7 @@ resource "aws_security_group" "rhel_sg" {
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+    cidr_blocks = [aws_vpc.main.cidr_block]
   }
 
   egress {
@@ -103,16 +103,34 @@ resource "aws_security_group" "rhel_sg" {
   }
 }
 
+# Security Group for VPC Endpoints
+resource "aws_security_group" "vpc_endpoints" {
+  name        = "vpc-endpoints-sg"
+  description = "Security group for VPC endpoints"
+  vpc_id      = aws_vpc.main.id
+
+  ingress {
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = [aws_vpc.main.cidr_block]
+  }
+
+  tags = {
+    Name = "vpc-endpoints-sg"
+  }
+}
+
 # AWS Managed Microsoft AD
 resource "aws_directory_service_directory" "main" {
-  name     = "corp.example.com"
+  name     = "gccnhb.gov.sg"
   password = "P@ssw0rd123"
   type     = "MicrosoftAD"
   edition  = "Standard"
 
   vpc_settings {
     vpc_id     = aws_vpc.main.id
-    subnet_ids = [aws_subnet.public.id, aws_subnet.private.id]
+    subnet_ids = [aws_subnet.private1.id, aws_subnet.private2.id]
   }
 
   tags = {
@@ -120,15 +138,70 @@ resource "aws_directory_service_directory" "main" {
   }
 }
 
-# Private Subnet for AD (required for AWS Managed AD)
-resource "aws_subnet" "private" {
+# Private Subnet 1 for EC2 and AD
+resource "aws_subnet" "private1" {
   vpc_id            = aws_vpc.main.id
   cidr_block        = "172.16.2.0/24"
+  availability_zone = data.aws_availability_zones.available.names[0]
+
+  tags = {
+    Name = "private-subnet-1"
+  }
+}
+
+# Private Subnet 2 for AD (required for AWS Managed AD)
+resource "aws_subnet" "private2" {
+  vpc_id            = aws_vpc.main.id
+  cidr_block        = "172.16.3.0/24"
   availability_zone = data.aws_availability_zones.available.names[1]
 
   tags = {
-    Name = "private-subnet"
+    Name = "private-subnet-2"
   }
+}
+
+# NAT Gateway
+resource "aws_eip" "nat" {
+  domain = "vpc"
+  tags = {
+    Name = "nat-eip"
+  }
+}
+
+resource "aws_nat_gateway" "main" {
+  allocation_id = aws_eip.nat.id
+  subnet_id     = aws_subnet.public.id
+
+  tags = {
+    Name = "main-nat"
+  }
+
+  depends_on = [aws_internet_gateway.main]
+}
+
+# Route Table for Private Subnets
+resource "aws_route_table" "private" {
+  vpc_id = aws_vpc.main.id
+
+  route {
+    cidr_block     = "0.0.0.0/0"
+    nat_gateway_id = aws_nat_gateway.main.id
+  }
+
+  tags = {
+    Name = "private-rt"
+  }
+}
+
+# Route Table Associations for Private Subnets
+resource "aws_route_table_association" "private1" {
+  subnet_id      = aws_subnet.private1.id
+  route_table_id = aws_route_table.private.id
+}
+
+resource "aws_route_table_association" "private2" {
+  subnet_id      = aws_subnet.private2.id
+  route_table_id = aws_route_table.private.id
 }
 
 # Get latest RHEL AMI
@@ -186,7 +259,7 @@ resource "aws_iam_instance_profile" "ec2_profile" {
 resource "aws_instance" "rhel" {
   ami                    = data.aws_ami.rhel.id
   instance_type          = "t3.micro"
-  subnet_id              = aws_subnet.public.id
+  subnet_id              = aws_subnet.private1.id
   vpc_security_group_ids = [aws_security_group.rhel_sg.id]
   iam_instance_profile   = aws_iam_instance_profile.ec2_profile.name
 
@@ -252,6 +325,50 @@ output "rhel_instance_id" {
   value = aws_instance.rhel.id
 }
 
-output "rhel_public_ip" {
-  value = aws_instance.rhel.public_ip
+# VPC Endpoints for SSM Fleet Manager
+resource "aws_vpc_endpoint" "ssm" {
+  vpc_id              = aws_vpc.main.id
+  service_name        = "com.amazonaws.us-east-1.ssm"
+  vpc_endpoint_type   = "Interface"
+  subnet_ids          = [aws_subnet.private1.id, aws_subnet.private2.id]
+  security_group_ids  = [aws_security_group.vpc_endpoints.id]
+  private_dns_enabled = true
+
+  tags = {
+    Name = "ssm-endpoint"
+  }
+}
+
+resource "aws_vpc_endpoint" "ssmmessages" {
+  vpc_id              = aws_vpc.main.id
+  service_name        = "com.amazonaws.us-east-1.ssmmessages"
+  vpc_endpoint_type   = "Interface"
+  subnet_ids          = [aws_subnet.private1.id, aws_subnet.private2.id]
+  security_group_ids  = [aws_security_group.vpc_endpoints.id]
+  private_dns_enabled = true
+
+  tags = {
+    Name = "ssmmessages-endpoint"
+  }
+}
+
+resource "aws_vpc_endpoint" "ec2messages" {
+  vpc_id              = aws_vpc.main.id
+  service_name        = "com.amazonaws.us-east-1.ec2messages"
+  vpc_endpoint_type   = "Interface"
+  subnet_ids          = [aws_subnet.private1.id, aws_subnet.private2.id]
+  security_group_ids  = [aws_security_group.vpc_endpoints.id]
+  private_dns_enabled = true
+
+  tags = {
+    Name = "ec2messages-endpoint"
+  }
+}
+
+output "rhel_private_ip" {
+  value = aws_instance.rhel.private_ip
+}
+
+output "nat_gateway_ip" {
+  value = aws_eip.nat.public_ip
 }
