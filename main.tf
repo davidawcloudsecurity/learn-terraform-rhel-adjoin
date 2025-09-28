@@ -105,7 +105,7 @@ resource "aws_security_group" "rhel_sg" {
 
 # AWS Managed Microsoft AD
 resource "aws_directory_service_directory" "main" {
-  name     = "gccnhb.gov.sg"
+  name     = "corp.example.com"
   password = "P@ssw0rd123"
   type     = "MicrosoftAD"
   edition  = "Standard"
